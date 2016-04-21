@@ -43,6 +43,8 @@ typedef struct
 /* Byte 63 of the first line of a TLE contains the ephemeris type.  The */
 /* following five values are recommended,  but it seems the non-zero    */
 /* values are only used internally;  "published" TLEs all have type 0.  */
+/* However,  I've had occasion to produce SGP4 TLEs for high-fliers, in */
+/* cases where I couldn't get an SDP4 fit.                              */
 
 #define TLE_EPHEMERIS_TYPE_DEFAULT           0
 #define TLE_EPHEMERIS_TYPE_SGP               1
