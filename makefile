@@ -42,7 +42,7 @@ uninstall:
 	rm /usr/local/lib
 	rm /usr/local/include
 
-OBJS= sgp.o sgp4.o sgp8.o sdp4.o sdp8.o deep.o basics.o get_el.o common.o
+OBJS= sgp.o sgp4.o sgp8.o sdp4.o sdp8.o deep.o basics.o get_el.o common.o tle_out.o
 
 get_high$(EXE):	 get_high.o get_el.o
 	$(CC) $(CFLAGS) -o get_high$(EXE) get_high.o get_el.o
