@@ -112,20 +112,24 @@ int tle_compare( const TLE *tle1, const TLE *tle2, const char sort_method)
    return( rval);
 }
 
-#ifdef _WIN32
       /* MS Windows lacks the re-entrant qsort_r;  we have to use  */
       /* plain old non-re-entrant qsort and a global variable.     */
+      /* BSD has it,  but with the wrong order of arguments.       */
+#ifdef __linux
+#define HAVE_REENTRANT_QSORT
+#endif
 
+#ifdef HAVE_REENTRANT_QSORT
+int tle_compare_for_qsort_r( const void *a, const void *b, void *c)
+{
+   return( tle_compare( (const TLE *)a, (const TLE *)b, *(char *)c));
+}
+#else
 static char comparison_method;
 
 int tle_compare_for_qsort( const void *a, const void *b)
 {
    return( tle_compare( (const TLE *)a, (const TLE *)b, comparison_method));
-}
-#else
-int tle_compare_for_qsort_r( const void *a, const void *b, void *c)
-{
-   return( tle_compare( (const TLE *)a, (const TLE *)b, *(char *)c));
 }
 #endif
 
@@ -198,7 +202,7 @@ int main( const int argc, const char **argv)
    if( strip_names)
       for( i = 0; i < n_found; i++)
          tles[i].name_line[0] = '\0';
-#ifdef _WIN32
+#ifndef HAVE_REENTRANT_QSORT
    comparison_method = sort_method;
    qsort( tles, n_found, sizeof( TLE), tle_compare_for_qsort);
 #else
