@@ -18,7 +18,7 @@ endif
 all: get_high$(EXE) mergetle$(EXE) obs_tes2$(EXE) obs_test$(EXE) out_comp$(EXE) \
 	test_sat$(EXE) test2$(EXE) sat_id$(EXE) sat_id2$(EXE) test_out$(EXE)
 
-CFLAGS=-Wall -O3 -pedantic -Wextra
+CFLAGS=-Wextra -Wall -O3 -pedantic -Wno-unused-parameter
 
 clean:
 	$(RM) *.o
