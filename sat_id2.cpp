@@ -15,8 +15,8 @@ int main( const int unused_argc, const char **unused_argv)
    char boundary[100], field[30];
    const char *temp_obs_filename = "sat_obs.txt";
    double search_radius = 4.;     /* look 2 degrees for matches */
-   double speed_cutoff = 0.015;  /* up to .015'/s motion discrepancy OK */
-   int argc = 4;
+   double motion_cutoff = 0.015;  /* up to .015'/s motion discrepancy OK */
+   const int argc = 5;
    FILE *lock_file = fopen( "lock.txt", "w");
    size_t bytes_written = 0;
    extern char **environ;
@@ -63,8 +63,8 @@ int main( const int unused_argc, const char **unused_argv)
          if( verbosity)
             verbose = atoi( verbosity + 1) + 1;
          }
-      if( !strcmp( field, "speed"))
-         speed_cutoff = atof( buff);
+      if( !strcmp( field, "motion"))
+         motion_cutoff = atof( buff);
       }
    if( verbose)
       printf( "Searching to %f degrees;  %u bytes read from input\n",
@@ -74,7 +74,7 @@ int main( const int unused_argc, const char **unused_argv)
    argv[2] = "-ttle_list.txt";
    sprintf( field, "-r%.2f", search_radius);
    argv[3] = field;
-   sprintf( buff, "-z%f", speed_cutoff);
+   sprintf( buff, "-y%f", motion_cutoff);
    argv[4] = buff;
    argv[5] = NULL;
    sat_id_main( argc, argv);
