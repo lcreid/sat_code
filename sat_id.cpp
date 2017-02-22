@@ -56,6 +56,7 @@ should be used,  and the others are suppressed.       */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include <stdlib.h>
 #include <assert.h>
 #include "norad.h"
@@ -258,6 +259,65 @@ static OBSERVATION *get_observations_from_file( FILE *ifile, size_t *n_found)
    return( rval);
 }
 
+static int id_compare( const OBSERVATION *a, const OBSERVATION *b)
+{
+   return( memcmp( a->text, b->text, 12));
+}
+
+static int compare_obs( const void *a, const void *b, void *context)
+{
+   const OBSERVATION *aptr = (const OBSERVATION *)a;
+   const OBSERVATION *bptr = (const OBSERVATION *)b;
+   int rval = id_compare( aptr, bptr);
+
+   if( !rval)        /* same IDs?  Then sort by JD of observation */
+      rval = (aptr->jd > bptr->jd ? 1 : -1);
+   return( rval);
+}
+
+/* Copied straight from 'mpc_obs.cpp' in Find_Orb.  See comments there. */
+
+void shellsort_r( void *base, const size_t n_elements, const size_t esize,
+         int (*compare)(const void *, const void *, void *), void *context)
+{
+#if (defined _GNU_SOURCE || defined __GNU__ || defined __linux)
+   qsort_r( base, n_elements, esize, compare, context);
+#else
+   size_t gap = 1;
+   char *data = (char *)base;
+   char *pivot = (char *)alloca( esize);
+
+   while( gap < n_elements)
+      gap = gap * 3 + 1;
+   while( gap /= 3)
+      {
+      size_t j;
+      const size_t spacing = esize * gap;
+
+      for( j = gap; j < n_elements; j++)
+         {
+         char *tptr = data + j * esize;
+         char *tptr2 = tptr - spacing;
+
+         if( (compare)( tptr2, tptr, context) > 0)
+            {
+            memcpy( pivot, tptr, esize);
+            memcpy( tptr, tptr2, esize);
+            tptr = tptr2;
+            tptr2 -= spacing;
+            while( tptr2 >= base && (compare)( tptr2, pivot, context) > 0)
+               {
+               memcpy( tptr, tptr2, esize);
+               tptr = tptr2;
+               tptr2 -= spacing;
+               }
+            memcpy( tptr, pivot, esize);
+            }
+         }
+      }
+#endif
+}
+
 /* Quick and dirty computation of apparent motion,  good enough
    for our humble purposes.  If you want absolute perfection,  see
    the 'dist_pa.cpp' code at http://www.projectpluto.com/source.htm . */
@@ -286,6 +346,59 @@ static int compute_motion( const double delta_t,
       {
       rval = -1;
       *arcmin_per_sec = *posn_ang = 0.;
+      }
+   return( rval);
+}
+
+static int compute_motion_between_obs( const OBSERVATION *obs1,
+             const OBSERVATION *obs2,
+             double *arcmin_per_sec, double *posn_ang)
+{
+   *arcmin_per_sec = *posn_ang = 0.;
+   int rval = 0;
+
+   if( !id_compare( obs1, obs2) && fabs( obs1->jd - obs2->jd) < .3)
+      {
+      const double dt = obs1->jd - obs2->jd;
+      const double ra1 = obs1->ra,  dec1 = obs1->dec;
+      const double ra2 = obs2->ra,  dec2 = obs2->dec;
+
+      rval = compute_motion( dt,
+                  (ra1 - ra2) * cos( (dec1 + dec2) / 2.),
+                  (dec1 - dec2), arcmin_per_sec, posn_ang);
+      }
+   return( rval);
+}
+
+/* Out of all observations for a given object,  this function will keep
+the last one,  and the preceding observation within 0.3 days.  The idea is
+to get a preceding observation that will give a good idea of the object's
+motion.  Of course,  in some cases,  we'll only have one observation and
+the match will have to be based on position only,  which is usually not
+all that reliable. */
+
+static int drop_extra_obs( OBSERVATION *obs, const int n_obs)
+{
+   int i = 0, j, rval = 0;
+
+   while( i < n_obs)
+      {
+      int k;
+
+      j = i + 1;
+      while( j < n_obs && !id_compare( obs + i, obs + j))
+         j++;
+      j--;           /* j = idx of last observation of this object */
+      k = j;
+      while( k > i && obs[j].jd - obs[k - 1].jd < 0.3
+                  && !memcmp( &obs[j].text[77], &obs[k].text[77], 3))
+         k--;
+      if( k != j)
+         {
+         obs[rval++] = obs[k];
+         }
+      obs[rval++] = obs[j];
+      i = j + 1;
       }
    return( rval);
 }
@@ -328,6 +441,7 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
    FILE *tle_file = fopen( tle_file_name, "rb");
    int rval = 0, n_tles_found = 0;
    bool force_sgp4_only = false;
+   bool check_updates = true;
 
    if( !tle_file)
       {
@@ -470,8 +584,18 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
          }
       else if( !memcmp( line2, "# SGP4 only", 11))
          force_sgp4_only = true;
+      else if( !memcmp( line2, "# No updates", 12))
+         check_updates = false;
       else if( !memcmp( line2, "# Ephem range:", 14))
-         sscanf( line2 + 14, "%*f %*f %lf\n", &tle_range);
+         {
+         const double mjd_1970 = 40587.;     /* MJD for 1970 Jan 1 */
+         double mjd_start, mjd_end;
+         double curr_mjd = mjd_1970 + (double)time( NULL) / 86400.;
+
+         sscanf( line2 + 14, "%lf %lf %lf\n", &mjd_start, &mjd_end, &tle_range);
+         if( check_updates && mjd_end < curr_mjd + 7.)
+            printf( "WARNING:  Update TLEs in '%s'\n", tle_file_name);
+         }
       else if( !memcmp( line2, "# MJD ", 6))
          tle_start = atof( line2 + 6) + 2400000.5;
       else if( !memcmp( line2, "# Include ", 10))
@@ -484,6 +608,19 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
       printf( "%d TLEs read from '%s'\n", n_tles_found, tle_file_name);
    fclose( tle_file);
    return( rval);
+}
+
+
+static void extract_motion( const char *match_text, double *xvel, double *yvel)
+{
+   const char *tptr = strstr( match_text, "'/sec at PA");
+   double total_vel, posn_angle;
+
+   assert( tptr);
+   total_vel = atof( tptr - 7);
+   posn_angle = atof( tptr + 11) * PI / 180.;
+   *xvel = total_vel * sin( posn_angle);
+   *yvel = total_vel * cos( posn_angle);
 }
 
 /* The "on-line version",  sat_id2,  gathers data from a CGI multipart form,
@@ -500,8 +637,11 @@ int main( const int argc, const char **argv)
    FILE *ifile = fopen( argv[1], "rb");
    OBSERVATION *obs;
    size_t n_obs;
-   double search_radius = .2;     /* default to .2-degree search */
+   double search_radius = 4;     /* default to 4-degree search */
    double max_revs_per_day = 6.;
+   double speed_cutoff = 0.;
+   double motion_mismatch_limit = .015;  /* up to .015'/s motion discrepancy OK */
+   double motion_mismatch_limit_squared;
 // int debug_level = 0;
    int rval;
 
@@ -516,6 +656,9 @@ int main( const int argc, const char **argv)
    obs = get_observations_from_file( ifile, &n_obs);
    fclose( ifile);
    printf( "%d observations found\n", (int)n_obs);
+   shellsort_r( obs, n_obs, sizeof( obs[0]), compare_obs, NULL);
+   n_obs = drop_extra_obs( obs, n_obs);
+   printf( "%d observations left after dropping extras\n", (int)n_obs);
    if( verbose)
       for( int i = 0; i < argc; i++)
          printf( "Arg %d: '%s'\n", i, argv[i]);
@@ -527,6 +670,9 @@ int main( const int argc, const char **argv)
             {
             case 'r':
                search_radius = atof( argv[i] + 2);
+               break;
+            case 'y':
+               motion_mismatch_limit = atof( argv[i] + 2);
                break;
             case 'm':
                max_revs_per_day = atof( argv[i] + 2);
@@ -544,6 +690,9 @@ int main( const int argc, const char **argv)
 //          case 'd':
 //             debug_level = atoi( argv[i] + 2);
 //             break;
+            case 'z':
+               speed_cutoff = atof( argv[i] + 2);
+               break;
             default:
                printf( "Unrecognized command-line option '%s'\n", argv[i]);
                exit( -2);
@@ -552,27 +701,42 @@ int main( const int argc, const char **argv)
 
    rval = add_tle_to_obs( obs, n_obs, tle_file_name, search_radius,
                                     max_revs_per_day);
-
+   motion_mismatch_limit_squared = motion_mismatch_limit * motion_mismatch_limit;
    for( size_t idx = 0; idx < n_obs; idx++)
-      {
-      printf( "\n%s\n", obs[idx].text);
-      if( idx && !memcmp( obs[idx].text, obs[idx - 1].text, 12)
-                && fabs( obs[idx].jd - obs[idx - 1].jd) < .3)
+      if( idx == n_obs - 1 || id_compare( obs + idx, obs + idx + 1))
          {
-         const double dt = obs[idx].jd - obs[idx - 1].jd;
-         const double ra1 = obs[idx].ra, dec1 = obs[idx].dec;
-         const double ra2 = obs[idx - 1].ra, dec2 = obs[idx - 1].dec;
-         double motion, posn_ang;
+         double motion = 0., posn_ang = 0.;
 
-         if( !compute_motion( dt,
-                     (ra1 - ra2) * cos( (dec1 + dec2) / 2.),
-                     (dec1 - dec2), &motion, &posn_ang))
-            printf( "    Object motion is %.3f'/sec at PA %.1f\n",
-               motion, posn_ang);
+         if( idx)
+            compute_motion_between_obs( obs + idx, obs + idx - 1,
+                        &motion, &posn_ang);
+         if( motion >= speed_cutoff)
+            {
+            const double xvel0 = motion * sin( posn_ang * PI / 180.);
+            const double yvel0 = motion * cos( posn_ang * PI / 180.);
+            int n_matches_shown = 0;
+
+            for( size_t i = 0; i < MAX_N_MATCHES && obs[idx].matches[i][0]; i++)
+               {
+               double xvel, yvel;
+
+               extract_motion( obs[idx].matches[i], &xvel, &yvel);
+               xvel -= xvel0;
+               yvel -= yvel0;
+               if( xvel * xvel + yvel * yvel < motion_mismatch_limit_squared)
+                  {
+                  if( !n_matches_shown)
+                     {
+                     printf( "\n%s\n", obs[idx].text);
+                     printf( "    Object motion is %.3f'/sec at PA %.1f\n",
+                        motion, posn_ang);
+                     }
+                  printf( "%s", obs[idx].matches[i]);
+                  n_matches_shown++;
+                  }
+               }
+            }
          }
-      for( size_t i = 0; i < MAX_N_MATCHES && obs[idx].matches[i][0]; i++)
-         printf( "%s", obs[idx].matches[i]);
-      }
    free( obs);
    get_station_code_data( NULL, NULL);
    return( rval);
