@@ -211,14 +211,14 @@ static void create_randomized_simplex( SIMPLEX_POINT *simp, const double *start_
       }
 }
 
-static void initialize_simplexes( SIMPLEX_POINT *simp, const double *state_vect,
+static int initialize_simplexes( SIMPLEX_POINT *simp, const double *state_vect,
                                    const double *start_vect, const int ephem)
 {
-   int i;
+   int i, rval = 0;
 
    memcpy( simp[6].state_vect, start_vect, 6 * sizeof( double));
    assert( start_vect[0] && start_vect[1] && start_vect[2]);
-   for( i = 0; i < 7; i++)
+   for( i = 0; i < 7 && !rval; i++)
       {
       tle_t tle;
       int iter = 0;
@@ -229,8 +229,10 @@ static void initialize_simplexes( SIMPLEX_POINT *simp, const double *state_vect,
       while ( (simp[i].error = compute_simplex_point_error( simp[i].state_vect,
                           &tle, state_vect, ephem)) > 1e+36 && iter++ < 1000)
          create_randomized_simplex( simp, start_vect);
-      assert( iter < 1000);
+      if( iter >= 1000)
+         rval = -1;
       }
+   return( rval);
 }
 
 static int find_tle_via_simplex_method( tle_t *tle, const double *state_vect,
@@ -245,7 +247,8 @@ static int find_tle_via_simplex_method( tle_t *tle, const double *state_vect,
    if( verbose)
       show_results( "Setting up:", NULL, start_vect);
    srand( 1);
-   initialize_simplexes( simp, state_vect, start_vect, ephem);
+   if( initialize_simplexes( simp, state_vect, start_vect, ephem))
+      return( 0);       /* no solution found */
    while( !soln_found && n_iterations++ < max_iterations)
       {
       double ytry;
