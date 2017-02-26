@@ -16,7 +16,8 @@ int main( const int unused_argc, const char **unused_argv)
    const char *temp_obs_filename = "sat_obs.txt";
    double search_radius = 4.;     /* look 2 degrees for matches */
    double motion_cutoff = 0.015;  /* up to .015'/s motion discrepancy OK */
-   const int argc = 5;
+   double low_speed_cutoff = 0.003;  /* anything slower than this is almost */
+   const int argc = 6;               /* certainly not an artsat */
    FILE *lock_file = fopen( "lock.txt", "w");
    size_t bytes_written = 0;
    extern char **environ;
@@ -38,8 +39,8 @@ int main( const int unused_argc, const char **unused_argv)
       fprintf( lock_file, "%s\n", environ[i]);
    if( !fgets( boundary, sizeof( boundary), stdin))
       {
-      printf( "<b> No info read from stdin</b>");
-      printf( "This isn't supposed to happen.\n");
+      printf( "<p><b> No info read from stdin</b></p>");
+      printf( "<p>This isn't supposed to happen.</p>");
       return( 0);
       }
    while( get_multipart_form_data( boundary, field, buff, NULL, max_buff_size) >= 0)
@@ -65,6 +66,8 @@ int main( const int unused_argc, const char **unused_argv)
          }
       if( !strcmp( field, "motion"))
          motion_cutoff = atof( buff);
+      if( !strcmp( field, "low_speed"))
+         low_speed_cutoff = atof( buff);
       }
    if( verbose)
       printf( "Searching to %f degrees;  %u bytes read from input\n",
@@ -76,7 +79,9 @@ int main( const int unused_argc, const char **unused_argv)
    argv[3] = field;
    sprintf( buff, "-y%f", motion_cutoff);
    argv[4] = buff;
-   argv[5] = NULL;
+   sprintf( boundary, "-z%f", low_speed_cutoff);
+   argv[5] = boundary;
+   argv[6] = NULL;
    sat_id_main( argc, argv);
    free( buff);
    printf( "</pre> </body> </html>");

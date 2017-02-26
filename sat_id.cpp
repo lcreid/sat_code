@@ -625,7 +625,7 @@ static void extract_motion( const char *match_text, double *xvel, double *yvel)
 
 /* The "on-line version",  sat_id2,  gathers data from a CGI multipart form,
    puts it into a file,  possibly adds in some options,  puts together the
- command-line arguments,  and then calls sat_id_main.            */
+ command-line arguments,  and then calls sat_id_main.  See 'sat_id2.cpp'. */
 
 #ifdef ON_LINE_VERSION
 int sat_id_main( const int argc, const char **argv)
@@ -636,13 +636,21 @@ int main( const int argc, const char **argv)
    const char *tle_file_name = "tle_list.txt";
    FILE *ifile = fopen( argv[1], "rb");
    OBSERVATION *obs;
-   size_t n_obs;
+   size_t n_obs, j;
    double search_radius = 4;     /* default to 4-degree search */
+            /* Asteroid searchers _sometimes_ report Molniyas to me,
+            which make two revolutions a day.  This limit could safely
+            be set to three,  but few artsats are between 6 and 3 revs/day
+            (i.e.,  in four to eight-hour orbits).  So this doesn't result
+            in much extra checking. */
    double max_revs_per_day = 6.;
-   double speed_cutoff = 0.;
-   double motion_mismatch_limit = .015;  /* up to .015'/s motion discrepancy OK */
+            /* Anything slower than 0.003'/min is almost certainly not an
+            artsat.  We don't even bother to check those.   */
+   double speed_cutoff = 0.003;
+          /* The computed and observed motions should match,  but (obviously)
+          only to some tolerance.  A tolerance of 0.015'/s seems to work. */
+   double motion_mismatch_limit = .015;
    double motion_mismatch_limit_squared;
-// int debug_level = 0;
    int rval;
 
    if( argc == 1)
@@ -699,6 +707,25 @@ int main( const int argc, const char **argv)
                break;
             }
 
+               /* Drop slow-moving objects : */
+   j = 0;
+   for( size_t idx = 0; idx < n_obs - 1; idx++)
+      if( !id_compare( obs + idx, obs + idx + 1))
+         {
+         double motion = 0., posn_ang = 0.;
+
+         compute_motion_between_obs( obs + idx, obs + idx + 1,
+                        &motion, &posn_ang);
+         if( motion >= speed_cutoff)
+            {
+            memmove( obs + j, obs + idx, 2 * sizeof( OBSERVATION));
+            j += 2;
+            idx++;
+            }
+         }
+   n_obs = j;
+   printf( "%d observations left after dropping slow objects\n", (int)n_obs);
+
    rval = add_tle_to_obs( obs, n_obs, tle_file_name, search_radius,
                                     max_revs_per_day);
    motion_mismatch_limit_squared = motion_mismatch_limit * motion_mismatch_limit;
@@ -728,8 +755,9 @@ int main( const int argc, const char **argv)
                   if( !n_matches_shown)
                      {
                      printf( "\n%s\n", obs[idx].text);
-                     printf( "    Object motion is %.3f'/sec at PA %.1f\n",
-                        motion, posn_ang);
+                     printf( "    Object motion is %.3f'/sec at PA %.1f  %.5f\n",
+                        motion, posn_ang,
+                        sqrt( xvel * xvel + yvel * yvel));
                      }
                   printf( "%s", obs[idx].matches[i]);
                   n_matches_shown++;
@@ -739,6 +767,7 @@ int main( const int argc, const char **argv)
          }
    free( obs);
    get_station_code_data( NULL, NULL);
+   printf( "%.1f seconds elapsed\n", (double)clock( ) / (double)CLOCKS_PER_SEC);
    return( rval);
 }     /* End of main() */
 
