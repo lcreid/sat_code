@@ -17,6 +17,7 @@ void DLL_FUNC get_satellite_ra_dec_delta( const double *observer_loc,
                                  const double *satellite_loc, double *ra,
                                  double *dec, double *delta);
 void DLL_FUNC epoch_of_date_to_j2000( const double jd, double *ra, double *dec);
+void DLL_FUNC j2000_to_epoch_of_date( const double jd, double *ra, double *dec);
 
 #ifdef __cplusplus
 }                       /* end of 'extern "C"' section */

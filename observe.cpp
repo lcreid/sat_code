@@ -74,9 +74,11 @@ void DLL_FUNC get_satellite_ra_dec_delta( const double *observer_loc,
    *dec = asin( vect[2] / *delta);
 }
 
-void DLL_FUNC epoch_of_date_to_j2000( const double jd, double *ra, double *dec)
+/* Formulae from Meeus' _Astronomical Algorithms_ for approximate precession.
+More than accurate enough for our purposes.  */
+
+static void precess( const double t_centuries, double *ra, double *dec)
 {
-   const double t_centuries = (jd - 2451545.) / 36525.;
    const double m = (3.07496 + .00186 * t_centuries / 2.) * (PI / 180.) / 240.;
    const double n = (1.33621 - .00057 * t_centuries / 2.) * (PI / 180.) / 240.;
    const double ra_rate  = m + n * sin( *ra) * tan( *dec);
@@ -84,4 +86,18 @@ void DLL_FUNC epoch_of_date_to_j2000( const double jd, double *ra, double *dec)
 
    *ra -= t_centuries * ra_rate * 100.;
    *dec -= t_centuries * dec_rate * 100.;
+}
+
+void DLL_FUNC epoch_of_date_to_j2000( const double jd, double *ra, double *dec)
+{
+   const double t_centuries = (jd - 2451545.) / 36525.;
+
+   precess( t_centuries, ra, dec);
+}
+
+void DLL_FUNC j2000_to_epoch_of_date( const double jd, double *ra, double *dec)
+{
+   const double t_centuries = (jd - 2451545.) / 36525.;
+
+   precess( -t_centuries, ra, dec);
 }
