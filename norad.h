@@ -22,10 +22,14 @@ typedef struct
 
    /* NOTE: xndt2o and xndt6o are used only in the "classic" SGP, */
    /* not in SxP4 or SxP8. */
-   /* xmo = mean anomaly at epoch */
-   /* xno = mean motion at epoch */
+   /* xmo = mean anomaly at epoch,  radians */
+   /* xno = mean motion at epoch,  radians/minute*/
 
-#define DEEP_ARG_T_PARAMS     94
+#ifdef RETAIN_PERTURBATION_VALUES_AT_EPOCH
+   #define DEEP_ARG_T_PARAMS     94
+#else
+   #define DEEP_ARG_T_PARAMS     88
+#endif
 
 #define N_SGP_PARAMS          11
 #define N_SGP4_PARAMS         30
