@@ -62,7 +62,20 @@ should be used,  and the others are suppressed.       */
 #include "norad.h"
 #include "observe.h"
 
-#define MAX_N_MATCHES 50
+#ifdef FRENCH_REPUBLICAN_CLOCK
+   #define  hours_per_day      10
+   #define minutes_per_hour   100
+   #define seconds_per_minute 100
+#else
+   #define hours_per_day       24
+   #define minutes_per_hour    60
+   #define seconds_per_minute  60
+#endif
+
+#define seconds_per_hour   (seconds_per_minute * minutes_per_hour)
+#define seconds_per_day    (seconds_per_hour * hours_per_day)
+#define minutes_per_day    (minutes_per_hour * hours_per_day)
+
 #define OBSERVATION struct observation
 
 OBSERVATION
@@ -70,7 +83,6 @@ OBSERVATION
    char text[81];
    double jd, ra, dec;
    double lon, rho_cos_phi, rho_sin_phi;
-   char matches[MAX_N_MATCHES][170];
    };
 
 #define PI 3.1415926535897932384626433832795028841971693993751058209749445923
@@ -233,21 +245,12 @@ static OBSERVATION *get_observations_from_file( FILE *ifile, size_t *n_found)
                {
                char station_data[100];
 
+               j2000_to_epoch_of_date( obs.jd, &obs.ra, &obs.dec);
                if( get_station_code_data( station_data, obs.text + 77))
                   printf( "FAILED to find MPC code %s\n", obs.text + 77);
                sscanf( station_data + 3, "%lf %lf %lf", &obs.lon,
                                         &obs.rho_cos_phi, &obs.rho_sin_phi);
                obs.lon *= PI / 180.;
-//             if( fabs( obs.rho_cos_phi) > 1.1 || fabs( obs.rho_sin_phi) > 1.1)
-//                {                                            /* lat and alt actually given; */
-//                const double lat = obs.rho_cos_phi * PI / 180.;  /* cvt them to parallax data   */
-//                const double alt_in_meters = obs.rho_sin_phi;
-//
-//                lat_alt_to_parallax( lat, alt_in_meters,
-//                            &obs.rho_cos_phi, &obs.rho_sin_phi);
-//                printf( "Parallax constants for %s: %.6f %.6f\n", obs.text + 77,
-//                            obs.rho_cos_phi, obs.rho_sin_phi);
-//                }
                rval[count] = obs;
                }
             count++;
@@ -318,87 +321,92 @@ void shellsort_r( void *base, const size_t n_elements, const size_t esize,
 #endif
 }
 
-/* Quick and dirty computation of apparent motion,  good enough
-   for our humble purposes.  If you want absolute perfection,  see
-   the 'dist_pa.cpp' code at http://www.projectpluto.com/source.htm . */
-
-static int compute_motion( const double delta_t,
-                const double d_ra,  const double d_dec,
-                double *arcmin_per_sec, double *posn_ang)
+static void compute_offsets( double *dx, double *dy,
+                double delta_ra, const double dec1, const double dec2)
 {
-   int rval = 0;
-
-   if( delta_t && (d_ra || d_dec))
-      {
-      double total_motion = sqrt( d_ra * d_ra + d_dec * d_dec);
-
-      *posn_ang = atan2( d_ra, d_dec) * 180. / PI;
-      if( *posn_ang < 0.)
-         *posn_ang += 360.;
-      if( delta_t < 0.)
-         {
-         *posn_ang = fmod( *posn_ang + 180., 360.);
-         total_motion *= -1.;
-         }
-      *arcmin_per_sec = (total_motion * 180. / PI) / (delta_t * 1440.);
-      }
-   else     /* undefined or no motion */
-      {
-      rval = -1;
-      *arcmin_per_sec = *posn_ang = 0.;
-      }
-   return( rval);
+   while( delta_ra > PI)
+      delta_ra -= PI + PI;
+   while( delta_ra < -PI)
+      delta_ra += PI + PI;
+   *dy = dec2 - dec1;
+   *dx = delta_ra * cos( (dec2 + dec1) / 2.);
 }
 
-static int compute_motion_between_obs( const OBSERVATION *obs1,
-             const OBSERVATION *obs2,
-             double *arcmin_per_sec, double *posn_ang)
+static double angular_sep( const double delta_ra, const double dec1,
+            const double dec2)
 {
-   *arcmin_per_sec = *posn_ang = 0.;
-   int rval = 0;
+   double dx, dy;
 
-   if( !id_compare( obs1, obs2) && fabs( obs1->jd - obs2->jd) < .3)
-      {
-      const double dt = obs1->jd - obs2->jd;
-      const double ra1 = obs1->ra,  dec1 = obs1->dec;
-      const double ra2 = obs2->ra,  dec2 = obs2->dec;
-
-      rval = compute_motion( dt,
-                  (ra1 - ra2) * cos( (dec1 + dec2) / 2.),
-                  (dec1 - dec2), arcmin_per_sec, posn_ang);
-      }
-   return( rval);
+   compute_offsets( &dx, &dy, delta_ra, dec1, dec2);
+   return( sqrt( dx * dx + dy * dy));
 }
 
-/* Out of all observations for a given object,  this function will keep
-the last one,  and the preceding observation within 0.3 days.  The idea is
-to get a preceding observation that will give a good idea of the object's
-motion.  Of course,  in some cases,  we'll only have one observation and
-the match will have to be based on position only,  which is usually not
-all that reliable. */
+/* Out of all observations for a given object,  this function will pick
+two that "best" describe the object's motion.  For that purpose,  we look
+for a pair closest to 'optimal_dist' apart.  We also limit the separation
+in time to 'max_time_sep';  that's to avoid a situation where the observations
+are really close to the optimal distance apart,  but are actually from
+different orbits.
 
-static int drop_extra_obs( OBSERVATION *obs, const int n_obs)
+This code thinks in terms of pairs of observations.  If somebody insists
+on providing a single observation,  we duplicate it.
+
+We also drop objects if they're moving slower than 'speed_cutoff',
+set to help us ignore the slow guys that are almost certainly rocks. */
+
+static int drop_extra_obs( OBSERVATION *obs, const int n_obs,
+                  const double speed_cutoff)
 {
-   int i = 0, j, rval = 0;
+   int i = 0, rval = 0;
 
    while( i < n_obs)
       {
-      int k;
+      int j = 0;
+      OBSERVATION *optr = obs + i;
 
-      j = i + 1;
-      while( j < n_obs && !id_compare( obs + i, obs + j))
+      while( j < n_obs - i && !id_compare( optr, optr + j))
          j++;
-      j--;           /* j = idx of last observation of this object */
-      k = j;
-      while( k > i && obs[j].jd - obs[k - 1].jd < 0.3
-                  && !memcmp( &obs[j].text[77], &obs[k].text[77], 3))
-         k--;
-      if( k != j)
+      if( j == 1)    /* singleton observation */
          {
-         obs[rval++] = obs[k];
+         obs[rval++] = *optr;
+         obs[rval++] = *optr;
          }
-      obs[rval++] = obs[j];
-      i = j + 1;
+      else        /* two or more obs:  pick two best */
+         {
+         int a, b, best_a = 1, best_b = 0;
+         double speed = 0.;
+         double best_score = 1e+30;
+
+         for( a = 1; a < j; a++)
+            for( b = 0; b < a; b++)
+               {
+               const double max_time_sep = 0.1;  /* .1 day = 2.4 hr */
+               const double optimal_dist = PI / 180.;   /* one degree */
+               const double dist = angular_sep( optr[b].ra - optr[a].ra,
+                                 optr[b].dec, optr[a].dec);
+               const double score = fabs( dist - optimal_dist);
+               const double dt = optr[a].jd - optr[b].jd;
+
+               assert( dt >= .0);
+               if( best_score > score
+                        && dt < max_time_sep && dt > 0.
+                        && !memcmp( &optr[a].text[77], &optr[b].text[77], 3))
+                  {
+                  best_score = score;
+                  best_a = a;
+                  best_b = b;
+                  speed = dist / dt;
+                  }
+               }
+         speed *= 180. / PI;    /* cvt speed from radians/day to deg/day */
+         speed /= minutes_per_day;    /* ...then to deg/hour = arcmin/minute */
+         if( speed > speed_cutoff)    /* omit slow objects */
+            {
+            obs[rval++] = optr[best_b];
+            obs[rval++] = optr[best_a];
+            }
+         }
+      i += j;
       }
    return( rval);
 }
@@ -417,6 +425,27 @@ Additional command-line arguments are:\n\
    exit( exit_code);
 }
 
+static int compute_artsat_ra_dec( double *ra, double *dec, double *dist,
+         const OBSERVATION *optr, tle_t *tle,
+         const double *sat_params)
+{
+   double observer_loc[3];
+   double pos[3]; /* Satellite position vector */
+   double t_since = (optr->jd - tle->epoch) * minutes_per_day;
+   int sxpx_rval;
+
+   observer_cartesian_coords( optr->jd, optr->lon,
+           optr->rho_cos_phi, optr->rho_sin_phi, observer_loc);
+   if( select_ephemeris( tle))
+      sxpx_rval = SDP4( t_since, tle, sat_params, pos, NULL);
+   else
+      sxpx_rval = SGP4( t_since, tle, sat_params, pos, NULL);
+   if( verbose > 2 && sxpx_rval)
+      printf( "TLE failed: %d\n", sxpx_rval);
+   get_satellite_ra_dec_delta( observer_loc, pos, ra, dec, dist);
+   return( sxpx_rval);
+}
+
 static bool is_in_range( const double jd, const double tle_start,
                                              const double tle_range)
 {
@@ -424,10 +453,13 @@ static bool is_in_range( const double jd, const double tle_start,
             (jd >= tle_start && jd <= tle_start + tle_range));
 }
 
+          /* The computed and observed motions should match,  but (obviously)
+          only to some tolerance.  A tolerance of 0.001'/s seems to work. */
+double motion_mismatch_limit = .001;
+
 /* Given a set of MPC observations and a TLE file,  this function looks at
 each TLE in the file and checks to see if that satellite came close to any
-of the observations.  We keep track of the MAX_N_MATCHES closest satellites
-to any given observation.  The function is called for each TLE file.
+of the observations.  The function is called for each TLE file.
 */
 
 int norad_id = 0;
@@ -440,7 +472,6 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
    double tle_start = 0., tle_range = 0.;
    FILE *tle_file = fopen( tle_file_name, "rb");
    int rval = 0, n_tles_found = 0;
-   bool force_sgp4_only = false;
    bool check_updates = true;
 
    if( !tle_file)
@@ -462,81 +493,66 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
                  || tle.xno < 2. * PI * max_revs_per_day / mins_per_day)
                  && (!norad_id || norad_id == tle.norad_number))
          {                           /* hey! we got a TLE! */
-         const int is_deep = (force_sgp4_only ? 0 : select_ephemeris( &tle));
-//       const int is_deep = select_ephemeris( &tle);
          double sat_params[N_SAT_PARAMS];
 
          if( verbose > 1)
             printf( "TLE found:\n%s\n%s\n", line1, line2);
          n_tles_found++;
-         if( is_deep)
+         if( select_ephemeris( &tle))
             SDP4_init( sat_params, &tle);
          else
             SGP4_init( sat_params, &tle);
-         for( size_t idx = 0; idx < n_obs; idx++)
+         for( size_t idx = 0; idx < n_obs; idx += 2)
             if( is_in_range( obs[idx].jd, tle_start, tle_range))
                {
                OBSERVATION *optr = obs + idx;
-               const double target_ra  = optr->ra;
-               const double target_dec = optr->dec;
-               const double jd         = optr->jd;
-               double observer_loc[3], observer_loc2[3];
-               double radius, d_ra, d_dec;
-               double ra, dec, dist_to_satellite, t_since;
-               double pos[3]; /* Satellite position vector */
-               double unused_delta2;
+               double dx, dy;
+               double radius;
+               double ra, dec, dist_to_satellite;
                int sxpx_rval;
 
-               observer_cartesian_coords( jd, optr->lon,
-                       optr->rho_cos_phi, optr->rho_sin_phi, observer_loc);
-               observer_cartesian_coords( jd + TIME_EPSILON,
-                      optr->lon, optr->rho_cos_phi, optr->rho_sin_phi, observer_loc2);
-
-               t_since = (jd - tle.epoch) * 1440.;
-               if( is_deep)
-                  sxpx_rval = SDP4( t_since, &tle, sat_params, pos, NULL);
-               else
-                  sxpx_rval = SGP4( t_since, &tle, sat_params, pos, NULL);
-               if( verbose > 2 && sxpx_rval)
-                  printf( "TLE failed: %d\n", sxpx_rval);
-               get_satellite_ra_dec_delta( observer_loc, pos,
-                                    &ra, &dec, &dist_to_satellite);
-               epoch_of_date_to_j2000( jd, &ra, &dec);
-               d_ra = (ra - target_ra + PI * 4.);
-               while( d_ra > PI)
-                  d_ra -= PI + PI;
-               d_dec = dec - target_dec;
-               radius = sqrt( d_ra * d_ra + d_dec * d_dec) * 180. / PI;
-               if( radius < search_radius)      /* good enough for us! */
+               sxpx_rval = compute_artsat_ra_dec( &ra, &dec, &dist_to_satellite,
+                              optr, &tle, sat_params);
+               compute_offsets( &dx, &dy, ra - optr->ra, dec, optr->dec);
+               radius = sqrt( dx * dx + dy * dy) * 180. / PI;
+               if( !sxpx_rval && radius < search_radius)      /* good enough for us! */
                   {
-                  double arcmin_per_sec, posn_ang;
+                  double dx1, dy1;
+                  const double dt = optr[1].jd - optr[0].jd;
+                  double motion_diff;
 
-                                 /* Compute position one second later,  so we */
-                                 /* can show speed/PA of motion: */
-                  t_since += TIME_EPSILON * 1440.;
-                  if( is_deep)
-                     SDP4( t_since, &tle, sat_params, pos, NULL);
-                  else
-                     SGP4( t_since, &tle, sat_params, pos, NULL);
-                  get_satellite_ra_dec_delta( observer_loc2, pos,
-                                       &d_ra, &d_dec, &unused_delta2);
-                  epoch_of_date_to_j2000( jd, &d_ra, &d_dec);
-                  if( verbose > 1)
-                     printf( "Made a match to obs %d\n", (int)idx + 1);
-                  d_ra -= ra;
-                  d_dec -= dec;
-                  while( d_ra > PI)
-                     d_ra -= PI + PI;
-                  while( d_ra < -PI)
-                     d_ra += PI + PI;
-                          /* Put RA into 0 to 2pi range: */
-                  if( !compute_motion( TIME_EPSILON, d_ra * cos( dec), d_dec,
-                              &arcmin_per_sec, &posn_ang))
+                  sxpx_rval = compute_artsat_ra_dec( &ra, &dec, &dist_to_satellite,
+                              optr + 1, &tle, sat_params);
+                  compute_offsets( &dx1, &dy1, ra - optr[1].ra, dec, optr[1].dec);
+                  dx1 -= dx;
+                  dy1 -= dy;
+                  motion_diff = sqrt( dx1 * dx1 + dy1 * dy1);
+                  if( dt)           /* convert separations/dist into speeds */
+                     {
+                     dx /= dt;
+                     dy /= dt;
+                     motion_diff /= dt;
+                     }
+                  assert( dt >= 0.);
+                  motion_diff *= 180. / PI;  /* now in degrees/day */
+                  motion_diff /= minutes_per_day;   /* now in arcmin/second */
+                  if( motion_diff < motion_mismatch_limit)
                      {
                      char obuff[200];
                      char full_intl_desig[20];
-                     size_t match_loc = 0;
+                     double xvel, yvel;
+                     double motion_rate, motion_pa;
 
+                     compute_offsets( &xvel, &yvel, optr[1].ra - optr[0].ra,
+                                                    optr[1].dec, optr[0].dec);
+                     if( dt)
+                        {
+                        motion_pa = atan2( yvel, xvel) * 180. / PI + 90.;
+                        if( motion_pa < 0.)
+                           motion_pa += 180.;
+                        motion_rate = sqrt( xvel * xvel + yvel * yvel);
+                        motion_rate *= (180. / PI) / 24.;
+                        }
                      line1[8] = line1[16] = '\0';
                      memcpy( line1 + 30, line1 + 11, 6);
                      line1[11] = '\0';
@@ -552,38 +568,20 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
                      if( strlen( line0) < 30)         /* object name given... */
                         sprintf( obuff + strlen( obuff), ": %s", line0);
                      obuff[79] = '\0';    /* avoid buffer overrun */
+//                   sprintf( obuff + strlen( obuff), " motion %f", motion_diff);
                      strcat( obuff, "\n");
                      sprintf( obuff + strlen( obuff),
                         "             motion %6.3f'/sec at PA %.1f; dist=%8.1f km; offset=%5.2f deg\n",
-                            arcmin_per_sec, posn_ang,
+                            motion_rate, motion_pa,
                             dist_to_satellite, radius);
                               /* "Speed" is displayed in arcminutes/second,
                                   or in degrees/minute */
-                     while( match_loc < MAX_N_MATCHES &&
-                                    obs[idx].matches[match_loc][0])
-                        {
-                        double r = atof( strstr( obs[idx].matches[match_loc], "offset=") + 7);
-
-                        if( radius < r)
-                           break;
-                        match_loc++;
-                        }
-                     if( match_loc < MAX_N_MATCHES)
-                        {
-                        for( size_t i = MAX_N_MATCHES - 1; i > match_loc; i--)
-                           strcpy( obs[idx].matches[i], obs[idx].matches[i - 1]);
-                        assert( strlen( obuff) < 169);
-                        strcpy( obs[idx].matches[match_loc], obuff);
-                        }
+                     printf( "%s\n", obs[idx].text);
+                     printf( "%s\n", obuff);
                      }
-                  else
-                     if( verbose)
-                        printf( "Motion check failed on obs %d\n", (int)idx + 1);
                   }
                }
          }
-      else if( !memcmp( line2, "# SGP4 only", 11))
-         force_sgp4_only = true;
       else if( !memcmp( line2, "# No updates", 12))
          check_updates = false;
       else if( !memcmp( line2, "# Ephem range:", 14))
@@ -611,18 +609,6 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
 }
 
 
-static void extract_motion( const char *match_text, double *xvel, double *yvel)
-{
-   const char *tptr = strstr( match_text, "'/sec at PA");
-   double total_vel, posn_angle;
-
-   assert( tptr);
-   total_vel = atof( tptr - 7);
-   posn_angle = atof( tptr + 11) * PI / 180.;
-   *xvel = total_vel * sin( posn_angle);
-   *yvel = total_vel * cos( posn_angle);
-}
-
 /* The "on-line version",  sat_id2,  gathers data from a CGI multipart form,
    puts it into a file,  possibly adds in some options,  puts together the
  command-line arguments,  and then calls sat_id_main.  See 'sat_id2.cpp'. */
@@ -636,7 +622,7 @@ int main( const int argc, const char **argv)
    const char *tle_file_name = "tle_list.txt";
    FILE *ifile = fopen( argv[1], "rb");
    OBSERVATION *obs;
-   size_t n_obs, j;
+   size_t n_obs;
    double search_radius = 4;     /* default to 4-degree search */
             /* Asteroid searchers _sometimes_ report Molniyas to me,
             which make two revolutions a day.  This limit could safely
@@ -644,13 +630,9 @@ int main( const int argc, const char **argv)
             (i.e.,  in four to eight-hour orbits).  So this doesn't result
             in much extra checking. */
    double max_revs_per_day = 6.;
-            /* Anything slower than 0.003'/min is almost certainly not an
+            /* Anything slower than 0.003'/sec is almost certainly not an
             artsat.  We don't even bother to check those.   */
    double speed_cutoff = 0.003;
-          /* The computed and observed motions should match,  but (obviously)
-          only to some tolerance.  A tolerance of 0.015'/s seems to work. */
-   double motion_mismatch_limit = .015;
-   double motion_mismatch_limit_squared;
    int rval;
 
    if( argc == 1)
@@ -665,7 +647,7 @@ int main( const int argc, const char **argv)
    fclose( ifile);
    printf( "%d observations found\n", (int)n_obs);
    shellsort_r( obs, n_obs, sizeof( obs[0]), compare_obs, NULL);
-   n_obs = drop_extra_obs( obs, n_obs);
+   n_obs = drop_extra_obs( obs, n_obs, speed_cutoff);
    printf( "%d observations left after dropping extras\n", (int)n_obs);
    if( verbose)
       for( int i = 0; i < argc; i++)
@@ -707,64 +689,8 @@ int main( const int argc, const char **argv)
                break;
             }
 
-               /* Drop slow-moving objects : */
-   j = 0;
-   for( size_t idx = 0; idx < n_obs - 1; idx++)
-      if( !id_compare( obs + idx, obs + idx + 1))
-         {
-         double motion = 0., posn_ang = 0.;
-
-         compute_motion_between_obs( obs + idx, obs + idx + 1,
-                        &motion, &posn_ang);
-         if( motion >= speed_cutoff)
-            {
-            memmove( obs + j, obs + idx, 2 * sizeof( OBSERVATION));
-            j += 2;
-            idx++;
-            }
-         }
-   n_obs = j;
-   printf( "%d observations left after dropping slow objects\n", (int)n_obs);
-
    rval = add_tle_to_obs( obs, n_obs, tle_file_name, search_radius,
                                     max_revs_per_day);
-   motion_mismatch_limit_squared = motion_mismatch_limit * motion_mismatch_limit;
-   for( size_t idx = 0; idx < n_obs; idx++)
-      if( idx == n_obs - 1 || id_compare( obs + idx, obs + idx + 1))
-         {
-         double motion = 0., posn_ang = 0.;
-
-         if( idx)
-            compute_motion_between_obs( obs + idx, obs + idx - 1,
-                        &motion, &posn_ang);
-         if( motion >= speed_cutoff)
-            {
-            const double xvel0 = motion * sin( posn_ang * PI / 180.);
-            const double yvel0 = motion * cos( posn_ang * PI / 180.);
-            int n_matches_shown = 0;
-
-            for( size_t i = 0; i < MAX_N_MATCHES && obs[idx].matches[i][0]; i++)
-               {
-               double xvel, yvel;
-
-               extract_motion( obs[idx].matches[i], &xvel, &yvel);
-               xvel -= xvel0;
-               yvel -= yvel0;
-               if( xvel * xvel + yvel * yvel < motion_mismatch_limit_squared)
-                  {
-                  if( !n_matches_shown)
-                     {
-                     printf( "\n%s\n", obs[idx].text);
-                     printf( "    Object motion is %.3f'/sec at PA %.1f  %.5f\n",
-                        motion, posn_ang,
-                        sqrt( xvel * xvel + yvel * yvel));
-                     }
-                  printf( "%s", obs[idx].matches[i]);
-                  n_matches_shown++;
-                  }
-               }
-            }
-         }
    free( obs);
    get_station_code_data( NULL, NULL);
    printf( "%.1f seconds elapsed\n", (double)clock( ) / (double)CLOCKS_PER_SEC);
