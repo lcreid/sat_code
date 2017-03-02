@@ -15,6 +15,17 @@ ifdef XCOMPILE
 	EXE=.exe
 endif
 
+# You can have your include files in ~/include and libraries in
+# ~/lib,  in which case only the current user can use them;  or
+# (with root privileges) you can install them to /usr/local/include
+# and /usr/local/lib for all to enjoy.
+
+ifdef GLOBAL
+	INSTALL_DIR=/usr/local
+else
+	INSTALL_DIR=~
+endif
+
 all: get_high$(EXE) mergetle$(EXE) obs_tes2$(EXE) obs_test$(EXE) out_comp$(EXE) \
 	test_sat$(EXE) test2$(EXE) sat_id$(EXE) sat_id2$(EXE) test_out$(EXE)
 
@@ -35,12 +46,16 @@ clean:
 	$(RM) test_sat$(EXE)
 
 install:
-	cp libsatell.a /usr/local/lib
-	cp norad.h     /usr/local/include
+	-mkdir $(INSTALL_DIR)/lib
+	cp libsatell.a $(INSTALL_DIR)/lib
+	cp norad.h     $(INSTALL_DIR)/include
+	-mkdir $(INSTALL_DIR)/bin
+	cp sat_id      $(INSTALL_DIR)/bin
 
 uninstall:
-	rm /usr/local/lib
-	rm /usr/local/include
+	rm $(INSTALL_DIR)/lib/libsatell.a
+	rm $(INSTALL_DIR)/include/norad.h
+	rm $(INSTALL_DIR)/bin/sat_id
 
 OBJS= sgp.o sgp4.o sgp8.o sdp4.o sdp8.o deep.o basics.o get_el.o common.o tle_out.o
 
