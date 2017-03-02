@@ -541,7 +541,7 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
                      char obuff[200];
                      char full_intl_desig[20];
                      double xvel, yvel;
-                     double motion_rate, motion_pa;
+                     double motion_rate = 0., motion_pa = 0.;
 
                      compute_offsets( &xvel, &yvel, optr[1].ra - optr[0].ra,
                                                     optr[1].dec, optr[0].dec);
@@ -597,8 +597,17 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
       else if( !memcmp( line2, "# MJD ", 6))
          tle_start = atof( line2 + 6) + 2400000.5;
       else if( !memcmp( line2, "# Include ", 10))
-         rval = add_tle_to_obs( obs, n_obs, line2 + 10, search_radius,
+         {
+         char iname[255];
+         size_t i = strlen( tle_file_name);
+
+         while( i && tle_file_name[i - 1] != '/')
+            i--;
+         memcpy( iname, tle_file_name, i);
+         strcpy( iname + i, line2 + 10);
+         rval = add_tle_to_obs( obs, n_obs, iname, search_radius,
                                     max_revs_per_day);
+         }
       strcpy( line0, line1);
       strcpy( line1, line2);
       }
