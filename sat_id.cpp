@@ -142,9 +142,19 @@ static int get_mpc_data( OBSERVATION *obs, const char *buff)
    return( 0);
 }
 
+void make_config_dir_name( char *oname, const char *iname)
+{
+   strcpy( oname, getenv( "HOME"));
+   strcat( oname, "/.find_orb/");
+   strcat( oname, iname);
+}
+
 /* This loads up the file 'ObsCodes.html' into memory on its first call.
 Then,  given an MPC code,  it finds the corresponding line and copies
-it into 'station_code_data'. */
+it into 'station_code_data'.  It looks in several places for the file;
+if you've installed Find_Orb,  it should be able to get it from the
+~/.find_orb directory.  It also checks for the truncated 'ObsCodes.htm'
+version of the file.      */
 
 int verbose = 0;
 
@@ -163,11 +173,21 @@ static int get_station_code_data( char *station_code_data,
    *station_code_data = '\0';
    if( !cached_data)
       {
-      FILE *ifile = fopen( "ObsCodes.html", "rb");
+      const char *filenames[2] = { "ObsCodes.html", "ObsCodes.htm" };
+      FILE *ifile = NULL;
       size_t size;
+      int i;
 
-      if( !ifile)              /* perhaps stored with truncated extension? */
-         ifile = fopen( "ObsCodes.htm", "rb");
+      for( i = 0; !ifile && i < 2; i++)
+         ifile = fopen( filenames[i], "rb");
+      for( i = 0; !ifile && i < 2; i++)
+         {
+         char filename[255];
+
+         make_config_dir_name( filename, filenames[i]);
+         ifile = fopen( filename, "rb");
+         }
+
       if( !ifile)
          {
          printf( "Failed to find MPC station list 'ObsCodes.html'\n");
@@ -681,7 +701,8 @@ int main( const int argc, const char **argv)
                break;
             case 't':
                tle_file_name = argv[i] + 2;
-               break;
+               if( !*tle_file_name && i < argc - 1)
+                  tle_file_name = argv[i + 1];
                break;
             case 'v':
                verbose = atoi( argv[i] + 2) + 1;
