@@ -59,6 +59,9 @@ should be used,  and the others are suppressed.       */
 #include <time.h>
 #include <stdlib.h>
 #include <assert.h>
+#ifdef _MSC_VER
+   #include <malloc.h>
+#endif
 #include "norad.h"
 #include "observe.h"
 
@@ -374,14 +377,14 @@ on providing a single observation,  we duplicate it.
 We also drop objects if they're moving slower than 'speed_cutoff',
 set to help us ignore the slow guys that are almost certainly rocks. */
 
-static int drop_extra_obs( OBSERVATION *obs, const int n_obs,
+static size_t drop_extra_obs( OBSERVATION *obs, const size_t n_obs,
                   const double speed_cutoff)
 {
-   int i = 0, rval = 0;
+   size_t i = 0, rval = 0;
 
    while( i < n_obs)
       {
-      int j = 0;
+      size_t j = 0;
       OBSERVATION *optr = obs + i;
 
       while( j < n_obs - i && !id_compare( optr, optr + j))
@@ -393,7 +396,7 @@ static int drop_extra_obs( OBSERVATION *obs, const int n_obs,
          }
       else        /* two or more obs:  pick two best */
          {
-         int a, b, best_a = 1, best_b = 0;
+         size_t a, b, best_a = 1, best_b = 0;
          double speed = 0.;
          double best_score = 1e+30;
 
