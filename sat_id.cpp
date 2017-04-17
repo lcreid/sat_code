@@ -59,7 +59,7 @@ should be used,  and the others are suppressed.       */
 #include <time.h>
 #include <stdlib.h>
 #include <assert.h>
-#ifdef _MSC_VER
+#ifdef _WIN32
    #include <malloc.h>
 #endif
 #include "norad.h"
