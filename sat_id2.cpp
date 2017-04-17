@@ -20,10 +20,10 @@ int main( const int unused_argc, const char **unused_argv)
    const int argc = 6;               /* certainly not an artsat */
    FILE *lock_file = fopen( "lock.txt", "w");
    size_t bytes_written = 0;
-   extern char **environ;
    extern int verbose;
-
 #ifndef _WIN32
+   extern char **environ;
+
    avoid_runaway_process( 15);
 #endif         /* _WIN32 */
    printf( "Content-type: text/html\n\n");
@@ -35,8 +35,10 @@ int main( const int unused_argc, const char **unused_argv)
       return( 0);
       }
    fprintf( lock_file, "We're in\n");
+#ifndef _WIN32
    for( size_t i = 0; environ[i]; i++)
       fprintf( lock_file, "%s\n", environ[i]);
+#endif
    if( !fgets( boundary, sizeof( boundary), stdin))
       {
       printf( "<p><b> No info read from stdin</b></p>");
