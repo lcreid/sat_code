@@ -6,8 +6,15 @@ ifdef CLANG
 	CC=clang
 endif
 
+# I'm using 'mkdir -p' to avoid error messages if the directory exists.
+# It may fail on very old systems,  and will probably fail on non-POSIX
+# systems.  If so,  change to '-mkdir' and ignore errors.
+
 ifdef MSWIN
 	EXE=.exe
+	MKDIR=-mkdir
+else
+	MKDIR=mkdir -p
 endif
 
 ifdef XCOMPILE
@@ -46,10 +53,10 @@ clean:
 	$(RM) test_sat$(EXE)
 
 install:
-	-mkdir $(INSTALL_DIR)/lib
+	$(MKDIR) $(INSTALL_DIR)/lib
 	cp libsatell.a $(INSTALL_DIR)/lib
 	cp norad.h     $(INSTALL_DIR)/include
-	-mkdir $(INSTALL_DIR)/bin
+	$(MKDIR) $(INSTALL_DIR)/bin
 	cp sat_id      $(INSTALL_DIR)/bin
 
 uninstall:
