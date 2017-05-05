@@ -106,12 +106,29 @@ static char *fgets_trimmed( char *buff, const int buffsize, FILE *ifile)
    return( rval);
 }
 
-static int get_mpc_data( OBSERVATION *obs, const char *buff)
+static double dmy_to_jd( const int year, const int month, const double day)
 {
-   int i1, i2, i, year, month;
-   double tval, day;
+   double rval = 1721059.5
+         + (double)( year * 365 + year / 4 - year / 100 + year / 400) + day;
+   int i;
    static const char month_len[12] = { 31, 28, 31, 30, 31, 30,
                                        31, 31, 30, 31, 30, 31 };
+
+   assert( month >= 1 && month <= 12);
+   assert( day >= 1. && day < 32.);
+   assert( year > 1956 && year < 2050);
+   for( i = 0; i < month - 1; i++)
+      rval += (double)month_len[i];
+   if( month < 3 && !(year % 4))    /* leap years,  January and February */
+      if( !(year % 400) || (year % 100))
+         rval--;
+   return( rval);
+}
+
+static int get_mpc_data( OBSERVATION *obs, const char *buff)
+{
+   int i1, i2, year, month;
+   double tval, day;
 
    if( strlen( buff) != 80)
       return( -1);
@@ -130,17 +147,7 @@ static int get_mpc_data( OBSERVATION *obs, const char *buff)
                /* Read in the day/month/year from the record... */
    if( sscanf( buff + 15, "%d %d %lf", &year, &month, &day) != 3)
       return( -5);
-   if( month < 1 || month > 12 || day < 1.
-                     || day > 1. + (double)month_len[month - 1])
-      return( -6);
-               /* ...and convert to a JD (NOTE:  non-negative years only) */
-   obs->jd = 1721059.5
-         + (double)( year * 365 + year / 4 - year / 100 + year / 400) + day;
-   for( i = 0; i < month - 1; i++)
-      obs->jd += (double)month_len[i];
-   if( month < 3 && !(year % 4))    /* leap years,  January and February */
-      if( !(year % 400) || (year % 100))
-         (obs->jd)--;
+   obs->jd = dmy_to_jd( year, month, day);
    strcpy( obs->text, buff);
    return( 0);
 }
@@ -487,12 +494,13 @@ of the observations.  The function is called for each TLE file.
 
 int norad_id = 0;
 
+double tle_start = 0., tle_range = 0.;
+
 static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
              const char *tle_file_name, const double search_radius,
              const double max_revs_per_day)
 {
    char line0[100], line1[100], line2[100];
-   double tle_start = 0., tle_range = 0.;
    FILE *tle_file = fopen( tle_file_name, "rb");
    int rval = 0, n_tles_found = 0;
    bool check_updates = true;
@@ -617,6 +625,19 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
          if( check_updates && mjd_end < curr_mjd + 7.)
             printf( "WARNING:  Update TLEs in '%s'\n", tle_file_name);
          }
+      else if( !memcmp( line2, "# Range: ", 9))
+         {
+         int year1, year2, month1, month2;
+         double day1, day2;
+         int n_read;
+
+         n_read = sscanf( line2 + 9, "%d-%d-%lf %d-%d-%lf",
+                     &year1, &month1, &day1,
+                     &year2, &month2, &day2);
+         assert( n_read == 6);
+         tle_start = dmy_to_jd( year1, month1, day1);
+         tle_range = dmy_to_jd( year2, month2, day2) - tle_start;
+         }
       else if( !memcmp( line2, "# MJD ", 6))
          tle_start = atof( line2 + 6) + 2400000.5;
       else if( !memcmp( line2, "# Include ", 10))
@@ -662,9 +683,10 @@ int main( const int argc, const char **argv)
             (i.e.,  in four to eight-hour orbits).  So this doesn't result
             in much extra checking. */
    double max_revs_per_day = 6.;
-            /* Anything slower than 0.003'/sec is almost certainly not an
-            artsat.  We don't even bother to check those.   */
-   double speed_cutoff = 0.003;
+            /* Anything slower than 0.001'/sec is almost certainly not an
+            artsat.  We don't even bother to check those (unless the -z
+            option is used to reset this limit).  */
+   double speed_cutoff = 0.001;
    int rval;
 
    if( argc == 1)
@@ -679,13 +701,9 @@ int main( const int argc, const char **argv)
    fclose( ifile);
    printf( "%d observations found\n", (int)n_obs);
    shellsort_r( obs, n_obs, sizeof( obs[0]), compare_obs, NULL);
-   n_obs = drop_extra_obs( obs, n_obs, speed_cutoff);
-   printf( "%d observations left after dropping extras\n", (int)n_obs);
    if( verbose)
       for( int i = 0; i < argc; i++)
          printf( "Arg %d: '%s'\n", i, argv[i]);
-   if( !obs || !n_obs)
-      return( -2);
    for( int i = 1; i < argc; i++)
       if( argv[i][0] == '-')
          switch( argv[i][1])
@@ -721,6 +739,10 @@ int main( const int argc, const char **argv)
                exit( -2);
                break;
             }
+   n_obs = drop_extra_obs( obs, n_obs, speed_cutoff);
+   printf( "%d observations left after dropping extras\n", (int)n_obs);
+   if( !obs || !n_obs)
+      return( -2);
 
    rval = add_tle_to_obs( obs, n_obs, tle_file_name, search_radius,
                                     max_revs_per_day);
