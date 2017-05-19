@@ -483,6 +483,19 @@ static bool is_in_range( const double jd, const double tle_start,
             (jd >= tle_start && jd <= tle_start + tle_range));
 }
 
+static bool got_obs_in_range( const OBSERVATION *obs, size_t n_obs,
+               const double jd_start, const double jd_end)
+{
+// if( obs[0].jd < jd_end && obs[n_obs - 1].jd > jd_start)
+      while( n_obs--)
+         {
+         if( obs->jd > jd_start && obs->jd < jd_end)
+            return( true);
+         obs++;
+         }
+   return( false);
+}
+
           /* The computed and observed motions should match,  but (obviously)
           only to some tolerance.  A tolerance of 0.001'/s seems to work. */
 double motion_mismatch_limit = .001;
@@ -494,7 +507,7 @@ of the observations.  The function is called for each TLE file.
 
 int norad_id = 0;
 
-double tle_start = 0., tle_range = 0.;
+double tle_start = 0., tle_range = 1e+9;
 
 static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
              const char *tle_file_name, const double search_radius,
@@ -519,7 +532,8 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
       tle_t tle;  /* Structure for two-line elements set for satellite */
       const double mins_per_day = 24. * 60.;
 
-      if( parse_elements( line1, line2, &tle) >= 0
+      if( got_obs_in_range( obs, n_obs, tle_start, tle_start + tle_range)
+                 && parse_elements( line1, line2, &tle) >= 0
                  && (tle.ephemeris_type == 'H'
                  || tle.xno < 2. * PI * max_revs_per_day / mins_per_day)
                  && (!norad_id || norad_id == tle.norad_number))
@@ -624,6 +638,14 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
          sscanf( line2 + 14, "%lf %lf %lf\n", &mjd_start, &mjd_end, &tle_range);
          if( check_updates && mjd_end < curr_mjd + 7.)
             printf( "WARNING:  Update TLEs in '%s'\n", tle_file_name);
+         if( !got_obs_in_range( obs, n_obs, mjd_start + 2400000.5,
+                                            mjd_end + 2400000.5))
+            {
+            if( verbose)
+               printf( "'%s' contains no TLEs for our time range\n", tle_file_name);
+            fclose( tle_file);
+            return( 0);
+            }
          }
       else if( !memcmp( line2, "# Range: ", 9))
          {
@@ -642,15 +664,20 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
          tle_start = atof( line2 + 6) + 2400000.5;
       else if( !memcmp( line2, "# Include ", 10))
          {
-         char iname[255];
-         size_t i = strlen( tle_file_name);
+         if( got_obs_in_range( obs, n_obs, tle_start, tle_start + tle_range))
+            {
+            char iname[255];
+            size_t i = strlen( tle_file_name);
 
-         while( i && tle_file_name[i - 1] != '/')
-            i--;
-         memcpy( iname, tle_file_name, i);
-         strcpy( iname + i, line2 + 10);
-         rval = add_tle_to_obs( obs, n_obs, iname, search_radius,
+            while( i && tle_file_name[i - 1] != '/')
+               i--;
+            memcpy( iname, tle_file_name, i);
+            strcpy( iname + i, line2 + 10);
+            rval = add_tle_to_obs( obs, n_obs, iname, search_radius,
                                     max_revs_per_day);
+            }
+         tle_start = 0.;
+         tle_range = 1e+9;
          }
       strcpy( line0, line1);
       strcpy( line1, line2);
