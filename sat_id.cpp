@@ -596,7 +596,9 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
                         if( motion_pa < 0.)
                            motion_pa += 180.;
                         motion_rate = sqrt( xvel * xvel + yvel * yvel);
-                        motion_rate *= (180. / PI) / 24.;
+                        motion_rate /= dt;
+                        motion_rate *= 180. / PI;        /* now in degrees/day */
+                        motion_rate /= 24.;              /* now in degrees/hr = arcsec/second */
                         }
                      line1[8] = line1[16] = '\0';
                      memcpy( line1 + 30, line1 + 11, 6);
@@ -616,7 +618,7 @@ static int add_tle_to_obs( OBSERVATION *obs, const size_t n_obs,
 //                   sprintf( obuff + strlen( obuff), " motion %f", motion_diff);
                      strcat( obuff, "\n");
                      sprintf( obuff + strlen( obuff),
-                        "             motion %6.3f'/sec at PA %.1f; dist=%8.1f km; offset=%5.2f deg\n",
+                        "             motion %5.2f\"/sec at PA %.1f; dist=%8.1f km; offset=%5.2f deg\n",
                             motion_rate, motion_pa,
                             dist_to_satellite, radius);
                               /* "Speed" is displayed in arcminutes/second,
